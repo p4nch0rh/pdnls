@@ -1,0 +1,205 @@
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import integrate
+
+# ==========================================
+# 1. CONFIGURACIÓN
+# ==========================================
+base_path = r'C:\simulation_data\pdnlS\alpha=6.5240\beta=1.0000'
+
+# Tolerancias
+TOL_STD_POS = 0.05
+TOL_STD_AMP = 0.015
+TOL_CENTER  = 0.5
+CUT_OFF     = 0.2
+
+results_nu = []
+results_gamma = []
+results_state = []
+
+def classify_dynamics(t, center, amplitude):
+    """Clasifica el estado."""
+    n = len(t)
+    start = int(n * (1 - CUT_OFF))
+    c_tail = center[start:]
+    a_tail = amplitude[start:]
+    
+    if np.mean(a_tail) < 0.1: return "Decay"
+    
+    mean_pos = np.mean(c_tail)
+    std_amp = np.std(a_tail)
+    
+    if len(c_tail) > 1:
+        coeffs = np.polyfit(np.arange(len(c_tail)), c_tail, 1)
+        slope = coeffs[0]
+    else: slope = 0
+    
+    is_breathing = std_amp > TOL_STD_AMP
+    is_drifting  = abs(mean_pos) > TOL_CENTER or abs(slope) > 0.001
+    
+    if is_drifting and is_breathing: return "Drifting Breather"
+    elif is_drifting: return "Stationary Drifted"
+    elif is_breathing: return "Stationary Breather"
+    else: return "Stationary Soliton"
+
+# ==========================================
+# 2. BUCLE PRINCIPAL
+# ==========================================
+print(f"Limpiando y generando gráficos únicos...")
+
+if os.path.exists(base_path):
+    gammas_dirs = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d)) and 'gamma=' in d]
+    gammas_dirs.sort()
+    
+    for g_dir in gammas_dirs:
+        try:
+            gamma_val = float(g_dir.split('=')[1])
+            path_gamma = os.path.join(base_path, g_dir)
+            
+           
+            fig_comp, ax_comp = plt.subplots(1, 3, figsize=(16, 5))
+            fig_comp.suptitle(f"Comparación Gamma = {gamma_val:.4f}", fontsize=14)
+            has_plots = False
+            
+            mus_dirs = [d for d in os.listdir(path_gamma) if os.path.isdir(os.path.join(path_gamma, d)) and 'mu=' in d]
+            
+            for m_dir in mus_dirs:
+                path_mu = os.path.join(path_gamma, m_dir)
+                nus_dirs = [d for d in os.listdir(path_mu) if os.path.isdir(os.path.join(path_mu, d)) and 'nu=' in d]
+                
+                nus_dirs.sort(key=lambda x: float(x.split('=')[1]), reverse=False) 
+                
+                for n_dir in nus_dirs:
+                    try:
+                        nu_val = float(n_dir.split('=')[1])
+                        sim_path = os.path.join(path_mu, n_dir)
+                        
+                        try:
+                            U_real = np.loadtxt(os.path.join(sim_path, 'field_real.txt'), delimiter=',')
+                            U_imag = np.loadtxt(os.path.join(sim_path, 'field_img.txt'), delimiter=',')
+                            x_grid = np.loadtxt(os.path.join(sim_path, 'X.txt'), delimiter=',')
+                            t_grid = np.loadtxt(os.path.join(sim_path, 'T.txt'), delimiter=',')
+                        except: continue
+
+                        has_plots = True
+                        
+                        # Cálculos
+                        U = U_real + 1j * U_imag
+                        U_mod = np.abs(U)
+                        N = integrate.simpson(U_mod ** 2, x_grid, axis=1)
+                        
+                        with np.errstate(divide='ignore', invalid='ignore'):
+                            center = integrate.simpson(x_grid * U_mod ** 2, x_grid, axis=1) / N
+                            center = np.nan_to_num(center)
+                            
+                        width = []
+                        for i in range(len(t_grid)):
+                            if N[i] > 1e-6:
+                                w = integrate.simpson((x_grid - center[i])**2 * U_mod[i,:]**2, x_grid) / N[i]
+                            else: w = 0
+                            width.append(w)
+                        width = np.array(width)
+                        
+                        Max_Amp = np.max(U_mod, axis=1)
+                        state = classify_dynamics(t_grid, center, Max_Amp)
+                        
+                        results_nu.append(nu_val)
+                        results_gamma.append(gamma_val)
+                        results_state.append(state)
+                        
+                        print(f"  G={gamma_val:.3f} | Nu={nu_val:.3f} -> {state}")
+                        
+                        # ===============================================
+                        # GRÁFICO INDIVIDUAL (ÚNICO Y ESTÁNDAR)
+                        # ===============================================
+                        
+                        fig_ind, ax_ind = plt.subplots(1, 3, figsize=(12, 3))
+                        
+                        # Posición
+                        ax_ind[0].plot(t_grid, center, 'b')
+                        ax_ind[0].set_title(f"Posición")
+                        ax_ind[0].set_ylim(-15, 15)
+                        ax_ind[0].set_xlabel(r"$t$")
+                        ax_ind[0].set_ylabel(r"$x_s$")
+                        
+                        # Energía
+                        ax_ind[1].plot(t_grid, N, 'r')
+                        ax_ind[1].set_title("Energía")
+                        ax_ind[1].set_xlabel(r"$t$")
+                        ax_ind[1].set_ylabel(r"$A$")
+                        
+                        # Ancho
+                        ax_ind[2].plot(t_grid, width, 'g')
+                        ax_ind[2].set_title("Ancho")
+                        ax_ind[2].set_xlabel(r"$t$")
+                        ax_ind[2].set_ylabel(r"$\delta$")
+                        
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(sim_path, 'individual_plot.png'))
+                        plt.close(fig_ind) 
+            
+                        lbl = f"nu={nu_val:.3f}"
+                        ax_comp[0].plot(t_grid, center, label=lbl, alpha=0.9)
+                        ax_comp[1].plot(t_grid, N, alpha=0.9)
+                        ax_comp[2].plot(t_grid, width, alpha=0.9)
+
+                    except Exception as e:
+                        print(f"Error procesando {n_dir}: {e}")
+
+            if has_plots:
+                
+                ax_comp[0].set_ylabel(r"$x_s$"); ax_comp[0].set_xlabel(r"$t$")
+                
+                handles, labels = ax_comp[0].get_legend_handles_labels()
+                ax_comp[0].legend(handles[::-1], labels[::-1], loc='center left', bbox_to_anchor=(1, 0.5), fontsize='xx-small')
+                
+                ax_comp[1].set_ylabel(r"$A$"); ax_comp[1].set_xlabel(r"$t$")
+                ax_comp[2].set_ylabel(r"$\delta$"); ax_comp[2].set_xlabel(r"$t$")
+                
+                plt.tight_layout()
+                plt.savefig(os.path.join(path_gamma, f'COMPARACION_gamma_{gamma_val:.4f}.png'), dpi=150)
+                plt.close(fig_comp)
+                
+        except Exception as e:
+            print(f"Error gamma {g_dir}: {e}")
+
+else:
+    print("Ruta base no existe")
+
+# ==========================================
+# 3. MAPA DE FASES
+# ==========================================
+if len(results_state) > 0:
+    plt.figure(figsize=(10, 8))
+    colors_map = {
+        "Decay": "black",
+        "Stationary Soliton": "green",
+        "Stationary Breather": "blue",
+        "Stationary Drifted": "orange",
+        "Drifting Breather": "magenta"
+    }
+    
+    arr_nu = np.array(results_nu)
+    arr_gamma = np.array(results_gamma)
+    arr_state = np.array(results_state)
+    
+    for state in np.unique(arr_state):
+        mask = (arr_state == state)
+        plt.scatter(
+            arr_nu[mask], arr_gamma[mask], 
+            c=colors_map.get(state, 'gray'), label=state, 
+            s=120, edgecolors='k'
+        )
+
+    plt.title("Diagrama de Fases Completo")
+    plt.xlabel(r"Detuning ($\nu$)")
+    plt.ylabel(r"Forzamiento ($\gamma$)")
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig(os.path.join(base_path, 'Mapa_Fases_Completo.png'))
+    plt.show()
+    print("¡Proceso finalizado!")
+else:
+    print("No se encontraron datos.")
