@@ -111,7 +111,7 @@ if os.path.exists(base_path):
                         print(f"  G={gamma_val:.3f} | Nu={nu_val:.3f} -> {state}")
                         
                         # ===============================================
-                        # GRÁFICO INDIVIDUAL (ÚNICO Y ESTÁNDAR)
+                        # GRÁFICO INDIVIDUAL 
                         # ===============================================
                         
                         fig_ind, ax_ind = plt.subplots(1, 3, figsize=(12, 3))
